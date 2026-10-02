@@ -5,7 +5,7 @@ import './App.css'
 import './Workspace.css'
 import './Conversion.css'
 
-const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5001').replace(/\/$/, '')
+const API_BASE_URL = (import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:5001' : window.location.origin)).replace(/\/$/, '')
 const conversionTools = [
   { id: 'pdf-to-word', title: 'PDF to Word', format: 'PDF to DOCX', description: 'Extract selectable PDF text into an editable Word file.', accepts: '.pdf,application/pdf', supportedFiles: 'PDF files with selectable text', icon: FileText, tone: 'red' },
   { id: 'word-to-excel', title: 'Word to Excel', format: 'DOCX to XLSX', description: 'Move paragraphs and tables into spreadsheet rows.', accepts: '.docx', supportedFiles: 'Word documents (.docx)', icon: FileSpreadsheet, tone: 'green' },

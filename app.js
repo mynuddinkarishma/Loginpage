@@ -1,7 +1,8 @@
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { DatabaseSync } from 'node:sqlite'
@@ -17,9 +18,11 @@ import { createWorker } from 'tesseract.js'
 
 const scrypt = promisify(scryptCallback)
 const projectRoot = dirname(fileURLToPath(import.meta.url))
-const databasePath = resolve(process.env.DB_PATH || join(projectRoot, 'data', 'pdfflow.sqlite'))
-const host = process.env.HOST || '127.0.0.1'
+const dataDirectory = process.env.RAILWAY_VOLUME_MOUNT_PATH || join(projectRoot, 'data')
+const databasePath = resolve(process.env.DB_PATH || join(dataDirectory, 'pdfflow.sqlite'))
+const host = process.env.HOST || (process.env.PORT ? '0.0.0.0' : '127.0.0.1')
 const port = Number(process.env.PORT || 5001)
+const frontendRoot = resolve(projectRoot, 'dist')
 const maxUploadBytes = 25 * 1024 * 1024
 const maxRequestBytes = 50 * 1024 * 1024
 const docxMimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -60,6 +63,49 @@ function httpError(statusCode, message) {
 function sendJson(response, statusCode, body) {
 	response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' })
 	response.end(JSON.stringify(body))
+}
+
+async function serveFrontend(pathname, response) {
+	let decodedPath
+	try {
+		decodedPath = decodeURIComponent(pathname)
+	} catch {
+		throw httpError(400, 'Invalid URL path.')
+	}
+
+	const requestedPath = decodedPath === '/' ? '/index.html' : decodedPath
+	const filePath = resolve(frontendRoot, `.${requestedPath}`)
+	if (filePath !== frontendRoot && !filePath.startsWith(`${frontendRoot}${sep}`)) {
+		throw httpError(404, 'Not found.')
+	}
+
+	let content
+	let servedPath = filePath
+	try {
+		content = await readFile(filePath)
+	} catch {
+		if (extname(requestedPath)) throw httpError(404, 'Not found.')
+		servedPath = join(frontendRoot, 'index.html')
+		try {
+			content = await readFile(servedPath)
+		} catch {
+			throw httpError(503, 'Frontend assets have not been built.')
+		}
+	}
+
+	const contentTypes = {
+		'.css': 'text/css; charset=utf-8',
+		'.html': 'text/html; charset=utf-8',
+		'.ico': 'image/x-icon',
+		'.js': 'text/javascript; charset=utf-8',
+		'.json': 'application/json; charset=utf-8',
+		'.svg': 'image/svg+xml',
+	}
+	response.writeHead(200, {
+		'Content-Type': contentTypes[extname(servedPath).toLowerCase()] || 'application/octet-stream',
+		'Content-Length': content.length,
+	})
+	response.end(content)
 }
 
 async function readJson(request) {
@@ -421,6 +467,18 @@ async function handleRequest(request, response) {
 	const pathname = new URL(request.url, 'http://localhost').pathname
 
 	try {
+		if (request.method === 'GET') {
+			if (pathname === '/health') {
+				sendJson(response, 200, { status: 'ok' })
+				return
+			}
+			if (pathname.startsWith('/api/')) {
+				sendJson(response, 404, { message: 'Not found.' })
+				return
+			}
+			await serveFrontend(pathname, response)
+			return
+		}
 		if (request.method !== 'POST') {
 			sendJson(response, 404, { message: 'Not found.' })
 			return
